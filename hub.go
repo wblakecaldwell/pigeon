@@ -3,6 +3,7 @@
 package pigeon
 
 import (
+	"encoding/json"
 	"fmt"
 	"golang.org/x/net/websocket"
 	"log"
@@ -62,20 +63,33 @@ func (h *Hub) Listen() {
 		fmt.Printf("TODO: Received worker message: %#v\n", workerInfo)
 		//h.add(&worker)
 
+		// WBCTODO: Test message
 		// service this runner
-		actionRequest := ActionRequest{
+		actionRequestMessage := ActionRequestMessage{
 			RequestID:   123,
 			HostName:    "localhost",
 			CommandName: "say-hello",
 			Arguments:   "Blake",
 		}
-		err = websocket.JSON.Send(ws, actionRequest)
+		messageBody, err := json.Marshal(actionRequestMessage)
+		if err != nil {
+			fmt.Printf("Failure JSON marshalling: %s\n", err)
+			panic("WBCTODO")
+		}
+		fmt.Printf("WBCTODO: %s\n", messageBody)
+
+		rawMessage := json.RawMessage(messageBody)
+		message := Message{
+			Type:    "action-request",
+			Message: &rawMessage,
+		}
+		err = websocket.JSON.Send(ws, message)
 		if err != nil {
 			fmt.Printf("Error received while sending 'say-hello' action request: %s", err)
 			return
 		}
 
-		actionResponse := ActionResponse{}
+		actionResponse := Message{}
 		err = websocket.JSON.Receive(ws, &actionResponse)
 		if err != nil {
 			fmt.Println("Error received while trying to receive response for 'say-hello' action request: %s", err)

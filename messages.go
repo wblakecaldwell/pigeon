@@ -1,8 +1,14 @@
 package pigeon
 
 import (
-	"fmt"
+	"encoding/json"
 )
+
+// Message is the container for all websocket messages
+type Message struct {
+	Type    string           `json:"type"`
+	Message *json.RawMessage `json:"message"`
+}
 
 // ActionInfo can be performed by a worker
 type ActionInfo struct {
@@ -11,28 +17,28 @@ type ActionInfo struct {
 	Description string `json:"description"`
 }
 
-// WorkerInfo describes a Worker's capabilities
+// WorkerInfo is a top-level Message 'worker-info' type that describes a Worker's capabilities
 type WorkerInfo struct {
 	HostName         string       `json:"hostname"`
 	AvailableActions []ActionInfo `json:"availableActions"`
 }
 
-// ActionRequest is a command sent from the Hub to the worker for execution
-type ActionRequest struct {
+// HelloMessage is a top-level Message 'hello' that's sent, and ignored, to check connection.
+type HelloMessage struct {
+	// ignored
+}
+
+// ActionRequestMessage is a top-level Message type 'action-request' command sent from the Hub to the worker for execution
+type ActionRequestMessage struct {
 	RequestID   int64  `json:"requestID"`
 	HostName    string `json:"hostName"`
 	CommandName string `json:"commandName"`
 	Arguments   string `json:"arguments"`
 }
 
-// String returns a string representation of the ActionRequest
-func (ar *ActionRequest) String() string {
-	return fmt.Sprintf("RequestID: %d; HostName: %s; CommandName: %s; Arguments: %s;", ar.RequestID, ar.HostName, ar.CommandName, ar.Arguments)
-}
-
-// ActionResponse is a response sent from the Worker to the Hub in response to an ActionRequest
-type ActionResponse struct {
-	ActionRequest
+// ActionResponseMessage is a top-level Message type 'action-response' response sent from the Worker to the Hub in response to an ActionRequest
+type ActionResponseMessage struct {
+	ActionRequestMessage
 	Response string `json:"response"`
 	ErrorMsg string `json:"errorMsg"`
 }
