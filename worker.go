@@ -10,39 +10,10 @@ import (
 // Runner does something, given a request, returning a response
 type Runner func(string) (string, error)
 
-// Action is an action that this worker can perform
-type Action interface {
-	Name() string
-	Run(string) (string, error)
-}
-
-// action is an Action implementation
-type action struct {
-	name   string
-	runner Runner
-}
-
-// Name returns the name of this action
-func (a *action) Name() string {
-	return a.name
-}
-
-// Run performs the action, returning the response
-func (a *action) Run(req string) (string, error) {
-	return a.runner(req)
-}
-
-// NewAction returns a new Action
-func NewAction(name string, runner Runner) Action {
-	return &action{
-		name:   name,
-		runner: runner,
-	}
-}
-
 // Worker declares different actions that it can run and report back
 // to a host.
 type Worker struct {
+	host         string            // host of this worker
 	actionByName map[string]Action // keep track of actions by name
 	actionsLock  sync.RWMutex      // lock for accessing the actions maps
 	ws           *websocket.Conn   // connection to the Hub
@@ -50,8 +21,9 @@ type Worker struct {
 }
 
 // NewWorker returns a new Worker
-func NewWorker() (*Worker, error) {
+func NewWorker(host string) (*Worker, error) {
 	return &Worker{
+		host:         host,
 		actionByName: make(map[string]Action),
 		actionsLock:  sync.RWMutex{},
 	}, nil
@@ -69,9 +41,64 @@ func (w *Worker) ConnectToHub(hostPort string) error {
 		return fmt.Errorf("Error dialing to Hub: %s", err)
 	}
 
-	ws.Write([]byte("Hello!"))
+	w.ws = ws
+	workerInfo, _ := w.WorkerInfo() // TODO: error
+	err = websocket.JSON.Send(ws, workerInfo)
+	if err != nil {
+		fmt.Printf("Error sending WorkerInfo to the hub")
+	}
+	fmt.Println("Sent message to Hub - now listening for requests from Hub")
+
+	// listen for action requests from Hub
+	for {
+		actionRequest := ActionRequest{}
+		err := websocket.JSON.Receive(w.ws, &actionRequest)
+		if err != nil {
+			fmt.Printf("Error receiving ActionRequest from Hub: %s", err)
+			continue
+		}
+
+		actionResponse, err := w.ExecuteAction(actionRequest)
+		if err != nil {
+			fmt.Printf("Error occurred while trying to execute a request: %s", err)
+			continue
+		}
+		fmt.Println("Sending response")
+		err = websocket.JSON.Send(ws, actionResponse)
+		if err != nil {
+			fmt.Printf("Error occurred while trying to submit response: %s", err)
+			continue
+		}
+	}
 
 	return nil
+}
+
+// ExecuteAction runs the input ActionRequest
+func (w *Worker) ExecuteAction(actionRequest ActionRequest) (*ActionResponse, error) {
+	w.actionsLock.RLock()
+	defer w.actionsLock.RUnlock()
+
+	response := &ActionResponse{
+		ActionRequest: actionRequest,
+	}
+
+	// find the action
+	action, ok := w.actionByName[strings.ToLower(actionRequest.CommandName)]
+	if !ok {
+		response.ErrorMsg = fmt.Sprintf("Could not find an action named %s", actionRequest.CommandName)
+		return response, fmt.Errorf("Could not find an action registered with the name %s", actionRequest.CommandName)
+	}
+
+	// perform the action
+	responseText, err := action.Run(actionRequest.Arguments)
+	if err != nil {
+		response.ErrorMsg = fmt.Sprintf("An error occurred while running the command")
+		return response, fmt.Errorf("An error occurred while performing the action: %s - %s", actionRequest.String(), err)
+	}
+	response.Response = responseText
+
+	return response, nil
 }
 
 // Disconnect stops the connection to the remote Hub
@@ -107,4 +134,32 @@ func (w *Worker) GetAction(name string) Action {
 		return foundAction
 	}
 	return nil
+}
+
+// WorkerInfo builds a WorkerInfo about this Worker and its Actions
+func (w *Worker) WorkerInfo() (WorkerInfo, error) {
+	info := WorkerInfo{
+		HostName: w.host,
+	}
+
+	w.actionsLock.Lock()
+	defer w.actionsLock.Unlock()
+	for _, registeredAction := range w.actionByName {
+		info.AvailableActions = append(info.AvailableActions, ActionInfo{
+			Name:        registeredAction.Name(),
+			Usage:       registeredAction.Usage(),
+			Description: registeredAction.Description(),
+		})
+	}
+
+	return info, nil
+}
+
+// NewActionInfo returns an ActionInfo from an Action interface
+func NewActionInfo(action Action) (ActionInfo, error) {
+	return ActionInfo{
+		Name:        action.Name(),
+		Usage:       action.Usage(),
+		Description: action.Description(),
+	}, nil
 }

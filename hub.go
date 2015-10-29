@@ -51,15 +51,38 @@ func (h *Hub) Listen() {
 
 		// TODO: ask the worker about itself, to populate remoteWorker{}
 		// TODO: ask the remote worker what actions can be performed
-		worker := remoteWorker{}
-		msg := make([]byte, 10240)
-		_, err := ws.Read(msg)
+		//worker := remoteWorker{}
+
+		workerInfo := WorkerInfo{}
+		err := websocket.JSON.Receive(ws, &workerInfo)
 		if err != nil {
 			log.Printf("Couldn't establish connection with remote worker: %s", err)
 			return
 		}
-		fmt.Printf("TODO: Received worker message: %s", string(msg))
-		h.add(&worker)
+		fmt.Printf("TODO: Received worker message: %#v\n", workerInfo)
+		//h.add(&worker)
+
+		// service this runner
+		actionRequest := ActionRequest{
+			RequestID:   123,
+			HostName:    "localhost",
+			CommandName: "say-hello",
+			Arguments:   "Blake",
+		}
+		err = websocket.JSON.Send(ws, actionRequest)
+		if err != nil {
+			fmt.Printf("Error received while sending 'say-hello' action request: %s", err)
+			return
+		}
+
+		actionResponse := ActionResponse{}
+		err = websocket.JSON.Receive(ws, &actionResponse)
+		if err != nil {
+			fmt.Println("Error received while trying to receive response for 'say-hello' action request: %s", err)
+			return
+		}
+		fmt.Printf("\n\nResponse received from say-hello action!: %#v\n\n", actionResponse)
+
 	}
 
 	h.serveMux.Handle(h.urlPattern, websocket.Handler(onConnected))
