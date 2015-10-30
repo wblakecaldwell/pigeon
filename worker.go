@@ -5,7 +5,6 @@ package pigeon
 //
 
 import (
-	"encoding/json"
 	"fmt"
 	"golang.org/x/net/websocket"
 	"strings"
@@ -180,16 +179,15 @@ func (w *Worker) ConnectToHub(hostPort string) error {
 			case "action-request":
 				fmt.Println("Received message is an ActionRequestMessage")
 
-				var actionRequest ActionRequestMessage
-				err := json.Unmarshal(*message.Message, &actionRequest)
+				actionRequest, err := ExtractActionRequestMessage(&message)
 				if err != nil {
-					fmt.Printf("Couldn't unmarshal ActionRequestMessage: %s\n", err)
+					fmt.Print(err)
 					continue
 				}
 
 				// TODO: do this in a goroutine
 				// run the action
-				actionResponse, err := w.ExecuteAction(actionRequest)
+				actionResponse, err := w.ExecuteAction(*actionRequest)
 				if err != nil {
 					fmt.Printf("Error executing the action-request %#v: %s\n", actionRequest, err)
 					continue
@@ -197,19 +195,12 @@ func (w *Worker) ConnectToHub(hostPort string) error {
 				fmt.Printf("Executed response for %#v: %#v\n", actionRequest, actionResponse)
 
 				// queue up the response
-				respJSON, err := json.Marshal(actionResponse)
+				message, err := NewMessage("action-response", actionResponse)
 				if err != nil {
-					fmt.Println("Error JSON-marshalling the action-response response. Request: %#v; Response: %#v: %s",
-						actionRequest, actionResponse, err)
+					fmt.Println("Error creating Message object: %s", err)
 					continue
 				}
-
-				rawMessage := json.RawMessage(respJSON)
-				w.outMessageChan <- Message{
-					Type:    "action-response",
-					Message: &rawMessage,
-				}
-
+				w.outMessageChan <- *message
 				fmt.Printf("Queued action-request response: %#v\n", actionResponse)
 			}
 		}

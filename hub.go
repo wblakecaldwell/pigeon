@@ -89,14 +89,18 @@ func (h *Hub) Listen() {
 			return
 		}
 
-		actionResponse := Message{}
-		err = websocket.JSON.Receive(ws, &actionResponse)
+		response := &Message{}
+		err = websocket.JSON.Receive(ws, response)
 		if err != nil {
 			fmt.Println("Error received while trying to receive response for 'say-hello' action request: %s", err)
 			return
 		}
+		actionResponse, err := ExtractActionResponseMessage(response)
+		if err != nil {
+			fmt.Println("Error receiving response: %s", err)
+			return
+		}
 		fmt.Printf("\n\nResponse received from say-hello action!: %#v\n\n", actionResponse)
-
 	}
 
 	h.serveMux.Handle(h.urlPattern, websocket.Handler(onConnected))
