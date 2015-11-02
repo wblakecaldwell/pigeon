@@ -54,16 +54,15 @@ func (w *Worker) Start(hostPort string) error {
 			fmt.Printf("Success dialing the Hub at %s\n", url)
 
 			// send the worker info
-			workerInfo, err := w.WorkerInfo()
+			message, err := NewMessage("worker-info", w.WorkerInfo())
 			if err != nil {
-				ws = nil
-				fmt.Printf("Error getting the WorkerInfo: %s\n", err)
-				time.Sleep(500 * time.Millisecond)
-				continue
+				// this is fatal - can't recover from this nonsense
+				return nil, fmt.Errorf("Can't create the WorkerInfo Message: %s", err)
 			}
-			err = websocket.JSON.Send(ws, workerInfo)
+
+			err = websocket.JSON.Send(ws, message)
 			if err != nil {
-				fmt.Printf("Error sending the WorkerInfo: %s\n", err)
+				fmt.Printf("Error sending the WorkerInfo Message: %s\n", err)
 				continue
 			}
 			fmt.Println("Hub connection re-established")
@@ -71,47 +70,51 @@ func (w *Worker) Start(hostPort string) error {
 		}
 	}
 
-	wsClient := newWebsocketClient(repairFunc)
+	wsClient := newWebsocketClient(nil, repairFunc)
 	wsClient.Start()
 
 	// main loop - handle incoming requests
 	for {
+		// TODO: quit channel, which stops the wsClient and breaks out
 		select {
 		case message := <-wsClient.InMessageChan:
-			fmt.Printf("Received message from Hub: %#v\n", message) // TODO: this is a low-level debug message
+			prettyLogMessage("Received message from Hub:", message)
 
 			switch message.Type {
 			case "action-request":
-				fmt.Println("Received message is an ActionRequestMessage")
-
-				actionRequest, err := ExtractActionRequestMessage(&message)
-				if err != nil {
-					fmt.Print(err)
-					continue
-				}
-
-				// TODO: do this in a goroutine
-				// run the action
-				actionResponse, err := w.ExecuteAction(*actionRequest)
-				if err != nil {
-					fmt.Printf("Error executing the action-request %#v: %s\n", actionRequest, err)
-					continue
-				}
-				fmt.Printf("Executed response for %#v: %#v\n", actionRequest, actionResponse)
-
-				// queue up the response
-				message, err := NewMessage("action-response", actionResponse)
-				if err != nil {
-					fmt.Println("Error creating Message object: %s", err)
-					continue
-				}
-				wsClient.OutMessageChan <- *message
-				fmt.Printf("Queued action-request response: %#v\n", actionResponse)
+				fmt.Println("Handling an ActionRequest (type \"action-request\")")
+				go w.handleActionRequest(wsClient, &message)
 			}
 		}
 	}
 
 	return nil
+}
+
+// handleActionRequest handles a message of type "action-request" - is run in a goroutine
+func (w *Worker) handleActionRequest(wsClient *websocketClient, message *Message) {
+	actionRequest, err := ExtractActionRequestMessage(message)
+	if err != nil {
+		fmt.Printf("Failure extracting message - type is \"action-request\": %s\n", err)
+		return
+	}
+
+	// run the action
+	actionResponse, err := w.ExecuteAction(*actionRequest)
+	if err != nil {
+		fmt.Printf("Error executing the action-request %#v: %s\n", actionRequest, err)
+		return
+	}
+	prettyLogMessage("Executed response - request/response:", actionRequest, actionResponse)
+
+	// queue up the response
+	responseMessage, err := NewMessage("action-response", actionResponse)
+	if err != nil {
+		fmt.Println("Error creating Message object: %s", err)
+		return
+	}
+	wsClient.OutMessageChan <- *responseMessage
+	prettyLogMessage("Queued action-request response:", actionResponse)
 }
 
 // ExecuteAction runs the input ActionRequest
@@ -179,7 +182,7 @@ func (w *Worker) GetAction(name string) Action {
 }
 
 // WorkerInfo builds a WorkerInfo about this Worker and its Actions
-func (w *Worker) WorkerInfo() (WorkerInfo, error) {
+func (w *Worker) WorkerInfo() WorkerInfo {
 	info := WorkerInfo{
 		HostName: w.host,
 	}
@@ -187,21 +190,17 @@ func (w *Worker) WorkerInfo() (WorkerInfo, error) {
 	w.actionsLock.Lock()
 	defer w.actionsLock.Unlock()
 	for _, registeredAction := range w.actionByName {
-		info.AvailableActions = append(info.AvailableActions, ActionInfo{
-			Name:        registeredAction.Name(),
-			Usage:       registeredAction.Usage(),
-			Description: registeredAction.Description(),
-		})
+		info.AvailableActions = append(info.AvailableActions, NewActionInfo(registeredAction))
 	}
 
-	return info, nil
+	return info
 }
 
 // NewActionInfo returns an ActionInfo from an Action interface
-func NewActionInfo(action Action) (ActionInfo, error) {
+func NewActionInfo(action Action) ActionInfo {
 	return ActionInfo{
 		Name:        action.Name(),
 		Usage:       action.Usage(),
 		Description: action.Description(),
-	}, nil
+	}
 }

@@ -3,7 +3,6 @@
 package pigeon
 
 import (
-	"encoding/json"
 	"fmt"
 	"golang.org/x/net/websocket"
 	"log"
@@ -54,58 +53,60 @@ func (h *Hub) Listen() {
 		// TODO: ask the remote worker what actions can be performed
 		//worker := remoteWorker{}
 
-		workerInfo := WorkerInfo{}
-		err := websocket.JSON.Receive(ws, &workerInfo)
-		if err != nil {
-			log.Printf("Couldn't establish connection with remote worker: %s", err)
-			return
-		}
-		fmt.Printf("TODO: Received worker message: %#v\n", workerInfo)
-		//h.add(&worker)
+		wsClient := newWebsocketClient(ws, nil)
+		wsClient.Start()
+		defer wsClient.Stop()
 
-		// WBCTODO: Test message
-		// service this runner
-		actionRequestMessage := ActionRequestMessage{
-			RequestID:   123,
-			HostName:    "localhost",
-			CommandName: "say-hello",
-			Arguments:   "Blake",
-		}
-		messageBody, err := json.Marshal(actionRequestMessage)
-		if err != nil {
-			fmt.Printf("Failure JSON marshalling: %s\n", err)
-			panic("WBCTODO")
-		}
-		fmt.Printf("WBCTODO: %s\n", messageBody)
-
-		rawMessage := json.RawMessage(messageBody)
-		message := Message{
-			Type:    "action-request",
-			Message: &rawMessage,
-		}
-		err = websocket.JSON.Send(ws, message)
-		if err != nil {
-			fmt.Printf("Error received while sending 'say-hello' action request: %s", err)
-			return
-		}
-
-		response := &Message{}
-		for {
-			err = websocket.JSON.Receive(ws, response)
+		go func() {
+			// TODO - Temporary: send a test action request
+			actionRequestMessage := ActionRequestMessage{
+				RequestID:   123,
+				HostName:    "localhost",
+				CommandName: "say-hello",
+				Arguments:   "Blake",
+			}
+			message, err := NewMessage("action-request", actionRequestMessage)
 			if err != nil {
-				fmt.Println("Error received while trying to receive response for 'say-hello' action request: %s", err)
+				// can't recover from this
+				fmt.Printf("Error creating action-request: %s\n", err)
 				return
 			}
-			if message.Type != "action-response" {
-				continue
+			wsClient.OutMessageChan <- *message
+		}()
+
+		var workerInfo *WorkerInfo
+		var err error
+
+		// main loop
+		for {
+			// TODO: quit channel, which stops the wsClient and breaks out
+			select {
+			case message := <-wsClient.InMessageChan:
+				switch message.Type {
+				case "worker-info":
+					// register/update worker info
+					workerInfo, err = ExtractWorkerInfoMessage(&message)
+					if err != nil {
+						// dont' recover from this
+						fmt.Printf("Error extracting WorkerInfo message: %s\n", err)
+						return
+					}
+					// TODO: re-register Worker capabilities
+					prettyLogMessage("Received worker capabilities:", &workerInfo)
+					continue
+
+				case "action-response":
+					actionResponse, err := ExtractActionResponseMessage(&message)
+					if err != nil {
+						fmt.Printf("Error extracting ActionResponseMessage: %s\n", err)
+						continue
+					}
+
+					// TODO: handle the response
+					prettyLogMessage("Response received frmo say-hello action:", &actionResponse)
+				}
 			}
 		}
-		actionResponse, err := ExtractActionResponseMessage(response)
-		if err != nil {
-			fmt.Println("Error receiving response: %s", err)
-			return
-		}
-		fmt.Printf("\n\nResponse received from say-hello action!: %#v\n\n", actionResponse)
 	}
 
 	h.serveMux.Handle(h.urlPattern, websocket.Handler(onConnected))
@@ -123,4 +124,5 @@ func (h *Hub) Listen() {
 
 		}
 	}
+
 }

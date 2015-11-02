@@ -61,6 +61,17 @@ func ExtractActionRequestMessage(message *Message) (*ActionRequestMessage, error
 	return ret, nil
 }
 
+// ExtractWorkerInfoMessage unmarshals a WorkerInfo from the input Message's Message property,
+// returning error if it's the wrong type.
+func ExtractWorkerInfoMessage(message *Message) (*WorkerInfo, error) {
+	ret := &WorkerInfo{}
+	err := extractMessage(message, "worker-info", ret)
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
 // ActionResponseMessage is a top-level Message type 'action-response' response sent from the Worker to the Hub in response to an ActionRequest
 type ActionResponseMessage struct {
 	ActionRequestMessage
@@ -90,4 +101,16 @@ func extractMessage(message *Message, messageType string, target interface{}) er
 			messageType, string(*message.Message), err)
 	}
 	return nil
+}
+
+// prettyLogMessage pretty-print logs the input struct
+func prettyLogMessage(logStr string, objs ...interface{}) {
+	outputStr := logStr + "\n"
+	for _, obj := range objs {
+		pretty, err := json.MarshalIndent(obj, "    ", "    ")
+		if err == nil {
+			outputStr += "    " + string(pretty) + "\n"
+		}
+	}
+	fmt.Print(outputStr)
 }

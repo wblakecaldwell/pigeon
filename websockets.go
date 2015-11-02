@@ -16,16 +16,24 @@ type websocketClient struct {
 	InMessageChan          chan Message
 	OutMessageChan         chan Message
 	repairConnectivityFunc connectionRepairFunc // function we'll call to repair connectivitiy
+	quitChan               chan interface{}
 }
 
 // newWebsocketClient returns a new websocketClient
-func newWebsocketClient(repairConnectivityFunc connectionRepairFunc) *websocketClient {
+func newWebsocketClient(conn *websocket.Conn, repairConnectivityFunc connectionRepairFunc) *websocketClient {
+	if repairConnectivityFunc == nil {
+		repairConnectivityFunc = func() (*websocket.Conn, error) {
+			return nil, fmt.Errorf("Can't/won't re-establish connection")
+		}
+	}
+
 	return &websocketClient{
-		wsConn:                 nil,
+		wsConn:                 conn,
 		wsConnMutex:            sync.RWMutex{},
 		InMessageChan:          make(chan Message, 1000),
 		OutMessageChan:         make(chan Message, 1000),
 		repairConnectivityFunc: repairConnectivityFunc,
+		quitChan:               make(chan interface{}),
 	}
 }
 
@@ -36,9 +44,16 @@ func (client *websocketClient) Start() {
 	go client.sendMessages()
 }
 
+// Stop shuts everything down
+func (client *websocketClient) Stop() {
+	close(client.quitChan)
+}
+
 // MaintainConnectivity sends a HelloMessage to check if connected. If not connected,
 // will try to repair the connection.
 func (client *websocketClient) maintainConnectivity() {
+	defer close(client.quitChan)
+
 	for {
 		client.wsConnMutex.RLock()
 		ws := client.wsConn
@@ -88,13 +103,22 @@ func (client *websocketClient) maintainConnectivity() {
 
 // receiveMessages keeps trying to read from a websocket connection,
 // writing received messages to a channel
-func (client *websocketClient) receiveMessages() error {
+func (client *websocketClient) receiveMessages() {
 	for {
+		select {
+		case _ = <-client.quitChan:
+			// told to stop, or disconnected and couldn't reconnect
+			fmt.Println("quitting: receiveMessages")
+			return
+		default:
+		}
+
 		client.wsConnMutex.RLock()
 		ws := client.wsConn
 		client.wsConnMutex.RUnlock()
 
 		if ws == nil {
+			// not currently connected - try again in 500ms
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
@@ -105,6 +129,12 @@ func (client *websocketClient) receiveMessages() error {
 		if err != nil {
 			fmt.Printf("Error trying to receive messages from websocket: %s\n", err)
 			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		// accept, but outwardly ignore "hello" messages
+		if message.Type == "hello" {
+			fmt.Println("Received hello message")
 			continue
 		}
 
@@ -134,7 +164,9 @@ func (client *websocketClient) sendMessages() {
 
 			client.OutMessageChan <- message
 			time.Sleep(500 * time.Millisecond)
-			// TODO: quit channel
+		case <-client.quitChan:
+			fmt.Println("quitting: sendMessages")
+			return
 		}
 	}
 }
