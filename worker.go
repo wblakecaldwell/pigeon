@@ -18,43 +18,38 @@ type Runner func(string) (string, error)
 // Worker declares different actions that it can run and report back
 // to a host.
 type Worker struct {
-	host           string            // host of this worker
-	actionByName   map[string]Action // keep track of actions by name
-	actionsLock    sync.RWMutex      // lock for accessing the actions maps
-	doneCh         chan interface{}  // closed when done
-	inMessageChan  chan Message      // channel populated by messages received from the Hub
-	outMessageChan chan Message      // channel we write outgoing messages to, and deliver to the Hub
+	host         string            // host of this worker
+	actionByName map[string]Action // keep track of actions by name
+	actionsLock  sync.RWMutex      // lock for accessing the actions maps
+	doneCh       chan interface{}  // closed when done
 }
 
 // NewWorker returns a new Worker
 func NewWorker(host string) (*Worker, error) {
 	return &Worker{
-		host:           host,
-		actionByName:   make(map[string]Action),
-		actionsLock:    sync.RWMutex{},
-		inMessageChan:  make(chan Message, 100),
-		outMessageChan: make(chan Message, 100),
+		host:         host,
+		actionByName: make(map[string]Action),
+		actionsLock:  sync.RWMutex{},
 	}, nil
 }
 
-// ConnectToHub maintains a registered connection to the input hub host and port
+// Start maintains a registered connection to the input hub host and port
 // TODO: pass errors back to caller - have caller pass in an error channel? Return one?
-func (w *Worker) ConnectToHub(hostPort string) error {
-	var ws *websocket.Conn // connection to the Hub
-	wsMutex := sync.RWMutex{}
+func (w *Worker) Start(hostPort string) error {
 
-	// ensure connected - if there's any problem, sets the websocket to nil, and returns error
-	ensureConnected := func() error {
-		var err error
+	// function that dials and registers capabilities if needed
+	repairFunc := func() (*websocket.Conn, error) {
+		fmt.Println("Need to repair connection")
+
 		url := fmt.Sprintf("ws://%s/connect", hostPort)
-
-		if ws == nil {
+		for {
 			fmt.Printf("Dialing the Hub at %s\n", url)
-			ws, err = websocket.Dial(url, "", "http://localhost") // TODO: protocol needed?
+			ws, err := websocket.Dial(url, "", "http://localhost") // TODO: protocol needed?
 			if err != nil {
 				ws = nil
 				fmt.Printf("Failure dialing the Hub at %s: %s\n", url, err)
-				return fmt.Errorf("Error dialing Hub: %s", err)
+				time.Sleep(500 * time.Millisecond)
+				continue
 			}
 			fmt.Printf("Success dialing the Hub at %s\n", url)
 
@@ -62,117 +57,27 @@ func (w *Worker) ConnectToHub(hostPort string) error {
 			workerInfo, err := w.WorkerInfo()
 			if err != nil {
 				ws = nil
-				return fmt.Errorf("Error getting the WorkerInfo - closing the connection: %s\n", err)
-			}
-			err = websocket.JSON.Send(ws, workerInfo)
-			if err != nil {
-				if closeErr := ws.Close(); closeErr != nil {
-					fmt.Printf("Error closing websocket: %s\n", closeErr)
-					// don't return
-				}
-				ws = nil
-				return fmt.Errorf("Error sending the WorkerInfo - closing the connection: %s", err)
-			}
-			fmt.Println("Hub connection re-established")
-			return nil
-		}
-
-		// send a test message
-		fmt.Printf("Sending a test message to the Hub to check connectivity at %s\n", url)
-		message := HelloMessage{}
-		err = websocket.JSON.Send(ws, message)
-		if err != nil {
-			ws = nil
-			return fmt.Errorf("Failure sending test message to Hub: %s", err)
-		}
-		return nil
-	}
-
-	getWsFunc := func() (*websocket.Conn, error) {
-		for {
-			wsMutex.RLock()
-			localWs := ws
-			wsMutex.RUnlock()
-
-			if localWs != nil {
-				return localWs, nil
-			}
-
-			time.Sleep(6 * time.Second)
-
-			// TODO: way to break out
-		}
-
-		return nil, fmt.Errorf("Couldn't get the websocket connection")
-	}
-
-	// maintain the connection
-	go func() {
-		for {
-			wsMutex.Lock()
-			ensureConnected()
-			wsMutex.Unlock()
-
-			time.Sleep(5 * time.Second)
-
-			// TODO: add way to break out
-		}
-	}()
-
-	// listen for incoming messages
-	go func() {
-		// loop: read each message
-		for {
-			localWs, err := getWsFunc()
-			if err != nil {
-				fmt.Printf("Error trying to get a webservice connection: %s\n", err)
-				continue
-			}
-
-			// fetch the next message
-			var message Message
-			err = websocket.JSON.Receive(localWs, &message)
-			if err != nil {
-				fmt.Printf("Error trying to receive messages from websocket: %s\n", err)
+				fmt.Printf("Error getting the WorkerInfo: %s\n", err)
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
-
-			w.inMessageChan <- message
-
-			// TODO: add way to break out
-		}
-	}()
-
-	// listen for outgoing messages
-	go func() {
-		for {
-			select {
-			case message := <-w.outMessageChan:
-				localWs, err := getWsFunc()
-				if err != nil {
-					fmt.Printf("Error trying to get a webservice connection: %s\n", err)
-					continue
-				}
-
-				err = websocket.JSON.Send(localWs, message)
-				if err != nil {
-					fmt.Printf("Error received while trying to send message %#v - queuing it back up: %s\n", message, err)
-					w.outMessageChan <- message
-					continue
-				}
-
-			case <-w.doneCh:
-				fmt.Println("Outgoing message loop: doneChan is closed - breaking out")
-				return
+			err = websocket.JSON.Send(ws, workerInfo)
+			if err != nil {
+				fmt.Printf("Error sending the WorkerInfo: %s\n", err)
+				continue
 			}
+			fmt.Println("Hub connection re-established")
+			return ws, nil
 		}
-	}()
+	}
+
+	wsClient := newWebsocketClient(repairFunc)
+	wsClient.Start()
 
 	// main loop - handle incoming requests
 	for {
 		select {
-		case message := <-w.inMessageChan:
+		case message := <-wsClient.InMessageChan:
 			fmt.Printf("Received message from Hub: %#v\n", message) // TODO: this is a low-level debug message
 
 			switch message.Type {
@@ -200,7 +105,7 @@ func (w *Worker) ConnectToHub(hostPort string) error {
 					fmt.Println("Error creating Message object: %s", err)
 					continue
 				}
-				w.outMessageChan <- *message
+				wsClient.OutMessageChan <- *message
 				fmt.Printf("Queued action-request response: %#v\n", actionResponse)
 			}
 		}

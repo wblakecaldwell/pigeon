@@ -90,10 +90,15 @@ func (h *Hub) Listen() {
 		}
 
 		response := &Message{}
-		err = websocket.JSON.Receive(ws, response)
-		if err != nil {
-			fmt.Println("Error received while trying to receive response for 'say-hello' action request: %s", err)
-			return
+		for {
+			err = websocket.JSON.Receive(ws, response)
+			if err != nil {
+				fmt.Println("Error received while trying to receive response for 'say-hello' action request: %s", err)
+				return
+			}
+			if message.Type != "action-response" {
+				continue
+			}
 		}
 		actionResponse, err := ExtractActionResponseMessage(response)
 		if err != nil {

@@ -24,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	err = worker.ConnectToHub("localhost:5555")
+	err = worker.Start("localhost:5555")
 	if err != nil {
 		log.Printf("Error connecting to hub: %s", err)
 		os.Exit(1)
