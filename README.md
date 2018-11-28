@@ -1,4 +1,4 @@
 # pigeon (in progress)
 System for fetching status from remote clients
 
-This is a work in progress - everything will change.
+This is almost certainly a dead project.
